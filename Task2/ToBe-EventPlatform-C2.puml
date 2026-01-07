@@ -1,0 +1,137 @@
+@startuml ToBe_EventPlatform_C2
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(passenger, "Пассажир")
+Person(driver, "Водитель")
+
+System_Boundary(gf, "Платформа GoFuture (To-Be) — фокус на событийной платформе") {
+
+  Container(api_gw, "API Gateway / Edge", "Kong/Envoy/Nginx", "Аутентификация, маршрутизация, Strangler Fig, версионирование API")
+
+  System_Boundary(domains, "Доменные сервисы") {
+    Container(svc_booking, "Сервис Booking", "Service", "Оркестрация Saga, жизненный цикл поездки")
+    Container(svc_driver, "Сервис Driver", "Service", "Состояние/локация/статус водителя")
+    Container(svc_pricing, "Сервис Pricing", "Service", "Расчёт цены + публикация pricing-событий")
+    Container(svc_payments, "Сервис Payments", "Service", "Авторизация/списание/возвраты/выплаты")
+    Container(svc_fraud, "Сервис Fraud", "Service", "Риск-скоринг, правила/ML")
+    Container(svc_notification, "Сервис Notification", "Service", "Push/SMS/e-mail")
+  }
+
+  System_Boundary(data, "Хранилища данных сервисов (+ Outbox)") {
+    ContainerDb(db_booking, "БД Booking + Outbox", "PostgreSQL", "Заказы/поездки + outbox-таблица")
+    ContainerDb(db_driver, "БД Driver + Outbox", "PostgreSQL", "Водители/статусы + outbox-таблица")
+    ContainerDb(db_pricing, "БД Pricing + Outbox", "PostgreSQL/Redis", "Параметры pricing + outbox")
+    ContainerDb(db_payments, "БД Payments + Outbox", "PostgreSQL", "Транзакции + аудит + outbox")
+    ContainerDb(db_fraud, "БД Fraud + Outbox", "PostgreSQL", "Скоринг/флаги + outbox")
+    ContainerDb(db_notification, "БД Notification + Outbox", "PostgreSQL/Redis", "Шаблоны/статусы отправок + outbox")
+  }
+
+  System_Boundary(kafka, "Kafka-платформа (мульти-регион)") {
+    Container(kafka_r1, "Kafka-кластер (регион A)", "Kafka", "Локальный backbone доменных событий, низкая латентность")
+    Container(kafka_r2, "Kafka-кластер (регион B)", "Kafka", "Локальный backbone доменных событий, низкая латентность")
+    Container(kafka_r3, "Kafka-кластер (регион C)", "Kafka", "Локальный backbone доменных событий, низкая латентность")
+
+    Container(schema, "Реестр схем (Schema Registry)", "Confluent Schema Registry", "Схемы Avro/Protobuf, правила совместимости")
+    Container(connect, "Kafka Connect + Debezium", "Connect", "CDC: публикация outbox → Kafka-топики")
+    Container(mm2, "MirrorMaker 2", "Kafka", "Репликация выбранных топиков в глобальный/аналитический контур")
+    Container(dlq, "DLQ и retry-топики", "Kafka Topics", "«Ядовитые» сообщения + отложенные ретраи")
+  }
+
+  System_Boundary(streams, "Обработка событий в реальном времени") {
+    Container(flink, "Flink-кластер", "Flink", "Stateful real-time обработка, exactly-once (через checkpoints)")
+    Container(kstreams, "Приложения Kafka Streams", "KStreams", "Лёгкие трансформации/агрегации рядом с сервисами")
+  }
+
+  System_Boundary(analytics, "Аналитика") {
+    ContainerDb(ch, "ClickHouse", "OLAP", "Near-real-time хранилище аналитики")
+    Container(ingestion, "Сервис ingestion в аналитику", "Consumer", "Читает доменные события → пишет в ClickHouse")
+  }
+
+  System_Boundary(obs, "Наблюдаемость (Observability)") {
+    Container(otel, "OpenTelemetry Collector", "OTel", "Корреляция трейсов/метрик/логов")
+    Container(prom, "Prometheus", "Metrics", "Сбор метрик (scrape/export)")
+    Container(graf, "Grafana", "Dashboards", "SLO + дашборды платформы")
+    Container(alertm, "Alertmanager", "Alerting", "Маршрутизация алертов (on-call)")
+    Container(loki, "Loki", "Logs", "Централизация логов")
+    Container(tempo, "Tempo/Jaeger", "Tracing", "Хранилище и поиск трейсов")
+    Container(kexp, "Kafka Exporter / JMX Exporter", "Exporter", "Метрики брокеров/топиков Kafka")
+    Container(burrow, "Burrow / Lag Exporter", "Exporter", "Метрики consumer lag и здоровье consumer-групп")
+  }
+}
+
+Rel(passenger, api_gw, "HTTPS")
+Rel(driver, api_gw, "HTTPS")
+
+Rel(api_gw, svc_booking, "REST")
+Rel(api_gw, svc_driver, "REST")
+Rel(api_gw, svc_pricing, "REST")
+Rel(api_gw, svc_payments, "REST")
+Rel(api_gw, svc_notification, "REST")
+
+Rel(svc_booking, db_booking, "RW")
+Rel(svc_driver, db_driver, "RW")
+Rel(svc_pricing, db_pricing, "RW")
+Rel(svc_payments, db_payments, "RW")
+Rel(svc_fraud, db_fraud, "RW")
+Rel(svc_notification, db_notification, "RW")
+
+' CDC Outbox -> Kafka
+Rel(connect, db_booking, "Читает outbox (CDC)")
+Rel(connect, db_driver, "Читает outbox (CDC)")
+Rel(connect, db_pricing, "Читает outbox (CDC)")
+Rel(connect, db_payments, "Читает outbox (CDC)")
+Rel(connect, db_fraud, "Читает outbox (CDC)")
+Rel(connect, db_notification, "Читает outbox (CDC)")
+
+Rel(connect, kafka_r1, "Публикует доменные события", "Kafka")
+Rel(connect, kafka_r2, "Публикует доменные события", "Kafka")
+Rel(connect, kafka_r3, "Публикует доменные события", "Kafka")
+Rel(connect, schema, "Проверка/совместимость схем", "HTTP")
+
+' Services consume/produce events
+Rel(svc_booking, kafka_r1, "Consume/Produce (события Saga)", "Kafka")
+Rel(svc_driver, kafka_r1, "Consume/Produce", "Kafka")
+Rel(svc_pricing, kafka_r1, "Consume/Produce", "Kafka")
+Rel(svc_payments, kafka_r1, "Consume/Produce", "Kafka")
+Rel(svc_fraud, kafka_r1, "Consume/Produce", "Kafka")
+Rel(svc_notification, kafka_r1, "Consume/Produce", "Kafka")
+
+' Stream processing
+Rel(flink, kafka_r1, "Consume/Produce", "Kafka")
+Rel(kstreams, kafka_r1, "Consume/Produce", "Kafka")
+Rel(flink, dlq, "Отправляет проблемные сообщения", "Kafka")
+Rel(kstreams, dlq, "Отправляет проблемные сообщения", "Kafka")
+
+' Analytics
+Rel(ingestion, kafka_r1, "Читает топики", "Kafka")
+Rel(ingestion, ch, "Пишет", "SQL/HTTP")
+
+' Replication
+Rel(mm2, kafka_r1, "Реплицирует выбранные топики", "Kafka")
+Rel(mm2, kafka_r2, "Реплицирует выбранные топики", "Kafka")
+Rel(mm2, kafka_r3, "Реплицирует выбранные топики", "Kafka")
+Rel(mm2, kafka_r1, "В глобальный/аналитический кластер (концептуально)", "Kafka")
+
+' Observability wiring
+Rel(otel, prom, "Экспорт метрик", "internal")
+Rel(otel, loki, "Корреляция логов", "internal")
+Rel(otel, tempo, "Экспорт трейсов", "internal")
+Rel(graf, prom, "Читает", "internal")
+Rel(graf, loki, "Читает", "internal")
+Rel(graf, tempo, "Читает", "internal")
+Rel(alertm, prom, "Получает алерты", "internal")
+
+Rel(kexp, prom, "Метрики Kafka", "scrape")
+Rel(burrow, prom, "Метрики lag", "scrape")
+Rel(flink, prom, "Метрики Flink", "scrape")
+Rel(kstreams, prom, "Метрики Streams", "scrape")
+
+Rel(api_gw, otel, "Трейсы/метрики/логи", "OTel")
+Rel(svc_booking, otel, "Трейсы/метрики/логи", "OTel")
+Rel(svc_driver, otel, "Трейсы/метрики/логи", "OTel")
+Rel(svc_pricing, otel, "Трейсы/метрики/логи", "OTel")
+Rel(svc_payments, otel, "Трейсы/метрики/логи", "OTel")
+Rel(svc_fraud, otel, "Трейсы/метрики/логи", "OTel")
+Rel(svc_notification, otel, "Трейсы/метрики/логи", "OTel")
+
+@enduml
