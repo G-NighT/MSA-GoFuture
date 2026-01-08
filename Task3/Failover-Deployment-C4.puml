@@ -1,0 +1,95 @@
+@startuml Failover_Deployment_C4
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Deployment.puml
+
+AddElementTag("CHANGE", $bgColor="red", $fontColor="white", $borderColor="red")
+AddRelTag("CHANGE", $textColor="red", $lineColor="red")
+
+Deployment_Node(global, "Global Edge") {
+  Deployment_Node(dns, "GeoDNS/Global LB", "DNS/GLB", "Latency-based routing + health checks", $tags="CHANGE") {
+    Container(glb, "Health checks", "L7 checks", "Проверка региональных ingress", $tags="CHANGE")
+  }
+  Deployment_Node(edge, "Edge Security", "CDN/WAF/DDoS", "Периметр защиты", $tags="CHANGE") {
+    Container(cdn, "CDN + DDoS", "Edge", "Anycast", $tags="CHANGE")
+    Container(waf, "WAF", "Security", "OWASP/bots/rate", $tags="CHANGE")
+  }
+}
+
+Deployment_Node(sea1, "SEA-1 Region", "Region", "Основной регион SEA") {
+  Deployment_Node(sea1_ing, "Ingress", "L7 LB", "Вход в регион", $tags="CHANGE") {
+    Container(api1, "API Gateway", "Kong/Envoy", "Маршрутизация")
+  }
+  Deployment_Node(sea1_app, "App Cluster", "K8s/VMs", "Доменные сервисы/consumers/Flink") {
+    Container(app1, "Доменные сервисы", "Services", "Booking/Driver/Pricing/Payments/…")
+  }
+  Deployment_Node(sea1_db, "DB Cluster", "PostgreSQL HA", "Primary + Sync Replica") {
+    ContainerDb(db1, "OLTP БД сервисов", "PostgreSQL", "Внутрирегиональная HA")
+  }
+  Deployment_Node(sea1_kafka, "Kafka Cluster", "Kafka", "RF=3") {
+    Container(k1, "Kafka", "Kafka", "Доменные события")
+  }
+}
+
+Deployment_Node(sea2, "SEA-2 Region", "Region", "Резерв/баланс SEA") {
+  Deployment_Node(sea2_ing, "Ingress", "L7 LB", "Вход в регион", $tags="CHANGE") {
+    Container(api2, "API Gateway", "Kong/Envoy", "Маршрутизация")
+  }
+  Deployment_Node(sea2_app, "App Cluster", "K8s/VMs", "Доменные сервисы/consumers/Flink") {
+    Container(app2, "Доменные сервисы", "Services", "Active-Active")
+  }
+  Deployment_Node(sea2_db, "DB Cluster", "PostgreSQL HA", "Primary + Sync Replica") {
+    ContainerDb(db2, "OLTP БД сервисов", "PostgreSQL", "HA")
+  }
+  Deployment_Node(sea2_kafka, "Kafka Cluster", "Kafka", "RF=3") {
+    Container(k2, "Kafka", "Kafka", "Доменные события")
+  }
+}
+
+Deployment_Node(sa1, "SA-1 Region", "Region", "Основной регион SA") {
+  Deployment_Node(sa1_ing, "Ingress", "L7 LB", "Вход в регион", $tags="CHANGE") {
+    Container(api3, "API Gateway", "Kong/Envoy", "Маршрутизация")
+  }
+  Deployment_Node(sa1_app, "App Cluster", "K8s/VMs", "Доменные сервисы/consumers/Flink") {
+    Container(app3, "Доменные сервисы", "Services", "Active-Active")
+  }
+  Deployment_Node(sa1_db, "DB Cluster", "PostgreSQL HA", "Primary + Sync Replica") {
+    ContainerDb(db3, "OLTP БД сервисов", "PostgreSQL", "HA")
+  }
+  Deployment_Node(sa1_kafka, "Kafka Cluster", "Kafka", "RF=3") {
+    Container(k3, "Kafka", "Kafka", "Доменные события")
+  }
+}
+
+Deployment_Node(dr, "DR Region (US/EU)", "Region", "DR/Global") {
+  Deployment_Node(dr_ing, "Ingress", "L7 LB", "Вход в DR", $tags="CHANGE") {
+    Container(api4, "API Gateway", "Kong/Envoy", "Failover")
+  }
+  Deployment_Node(dr_db, "DR DB Replicas", "PostgreSQL async", "Асинхронные реплики", $tags="CHANGE") {
+    ContainerDb(drdb, "DR реплики OLTP", "PostgreSQL", "RPO>0", $tags="CHANGE")
+  }
+  Deployment_Node(dr_kafka, "Kafka DR/Global", "Kafka", "Реплика топиков", $tags="CHANGE") {
+    Container(k4, "Kafka DR", "Kafka", "Replicated topics", $tags="CHANGE")
+  }
+  Deployment_Node(rep, "Replication", "MirrorMaker2", "Replication jobs", $tags="CHANGE") {
+    Container(mm2, "MM2/Replicator", "MirrorMaker2", "Репликация топиков", $tags="CHANGE")
+  }
+}
+
+' Failover paths
+Rel(dns, edge, "направляет трафик на edge", $tags="CHANGE")
+Rel(edge, sea1_ing, "по latency/health", $tags="CHANGE")
+Rel(edge, sea2_ing, "при деградации SEA-1", $tags="CHANGE")
+Rel(edge, sa1_ing, "для SA пользователей", $tags="CHANGE")
+Rel(edge, dr_ing, "если региональные входы down", $tags="CHANGE")
+
+' DB async replication to DR
+Rel(db1, drdb, "async replication", $tags="CHANGE")
+Rel(db2, drdb, "async replication", $tags="CHANGE")
+Rel(db3, drdb, "async replication", $tags="CHANGE")
+
+' Kafka replication
+Rel(k1, mm2, "topics", $tags="CHANGE")
+Rel(k2, mm2, "topics", $tags="CHANGE")
+Rel(k3, mm2, "topics", $tags="CHANGE")
+Rel(mm2, k4, "replicated topics", $tags="CHANGE")
+
+@enduml

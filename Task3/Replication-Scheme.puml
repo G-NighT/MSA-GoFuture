@@ -1,0 +1,34 @@
+@startuml Replication_Scheme
+left to right direction
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+AddElementTag("CHANGE", $bgColor="red", $fontColor="white", $borderColor="red")
+AddRelTag("CHANGE", $textColor="red", $lineColor="red")
+
+System_Boundary(rep, "Схема репликации (OLTP + события)") {
+
+  ContainerDb(booking_sea1, "Booking DB (SEA-1)", "PostgreSQL HA", "Primary + Sync Replica")
+  ContainerDb(pay_sea1, "Payments DB (SEA-1)", "PostgreSQL HA", "Primary + Sync Replica")
+
+  ContainerDb(booking_sa1, "Booking DB (SA-1)", "PostgreSQL HA", "Primary + Sync Replica")
+  ContainerDb(pay_sa1, "Payments DB (SA-1)", "PostgreSQL HA", "Primary + Sync Replica")
+
+  ContainerDb(dr_oltp, "DR реплики OLTP", "PostgreSQL async", "Асинхронные реплики из регионов", $tags="CHANGE")
+
+  Container(kafka_sea1, "Kafka (SEA-1)", "Kafka", "Доменные события")
+  Container(kafka_sa1, "Kafka (SA-1)", "Kafka", "Доменные события")
+  Container(kafka_dr, "Kafka (DR/Global)", "Kafka", "Реплика топиков для DR/аналитики", $tags="CHANGE")
+
+  Container(mm2, "Репликация топиков", "MirrorMaker2/Replicator", "Выборочные топики → DR/Global", $tags="CHANGE")
+}
+
+Rel(booking_sea1, dr_oltp, "async replication", $tags="CHANGE")
+Rel(pay_sea1, dr_oltp, "async replication", $tags="CHANGE")
+Rel(booking_sa1, dr_oltp, "async replication", $tags="CHANGE")
+Rel(pay_sa1, dr_oltp, "async replication", $tags="CHANGE")
+
+Rel(kafka_sea1, mm2, "topics", $tags="CHANGE")
+Rel(kafka_sa1, mm2, "topics", $tags="CHANGE")
+Rel(mm2, kafka_dr, "replicated topics", $tags="CHANGE")
+
+@enduml
