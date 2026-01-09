@@ -1,0 +1,112 @@
+@startuml DataPipeline_C4
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(ds, "Data Scientist", "Строит модели спроса/ценообразования/фрода")
+Person(analyst, "BI-аналитик", "Строит отчёты и витрины")
+Person(svc_owner, "Владелец сервиса", "Публикует события и отвечает за контракты")
+
+System_Boundary(gf, "GoFuture — платформа данных (ML + BI)") {
+
+  System_Boundary(ms, "Микросервисы (домены)") {
+    Container(s_booking, "Booking Service", "Service", "Публикует Booking/Trip события")
+    Container(s_driver, "Driver Service", "Service", "Публикует события локаций/статусов")
+    Container(s_pricing, "Pricing Service", "Service", "Публикует pricing сигналы/решения")
+    Container(s_pay, "Payments Service", "Service", "Публикует платежные события")
+    Container(s_fraud, "Fraud Service", "Service", "Публикует риск-флаги/решения")
+    Container(s_geo, "Geography Service", "Service", "ETA/маршруты (события/сигналы)")
+  }
+
+  System_Boundary(evt, "Событийная платформа") {
+    Container(kafka, "Kafka (event log)", "Kafka", "Доменные события, ретеншн, replay")
+    Container(schema, "Schema Registry", "Schema Registry", "Схемы и совместимость (Avro/Protobuf)")
+    Container(connect, "Kafka Connect / Debezium", "Connect", "CDC/outbox → Kafka (опционально)")
+  }
+
+  System_Boundary(stream, "Real-time обработка") {
+    Container(flink, "Flink / KStreams", "Stream Processing", "Окна/агрегации/joins, real-time признаки")
+    Container(fs, "Feature Store", "Feast (пример)", "Offline+Online признаки для ML")
+    Container(redis, "Online Store", "Redis", "Низкая латентность для online features")
+  }
+
+  System_Boundary(storage, "Хранилища данных") {
+    Container(lake, "Data Lake", "Object Storage", "Raw/Silver/Gold (история, партиции по дате/региону)")
+    Container(ch, "ClickHouse", "OLAP", "Near-real-time витрины и аналитика")
+  }
+
+  System_Boundary(ml, "ML-платформа") {
+    Container(airflow, "Оркестрация пайплайнов", "Airflow", "ETL/feature engineering/retraining по расписанию")
+    Container(mlflow, "Tracking + Model Registry", "MLflow", "Эксперименты, артефакты, версии моделей")
+    Container(train, "Обучение моделей", "Spark/Flink batch + jobs", "Тренировки на исторических данных")
+    Container(serving, "Online Inference", "Model Serving", "Онлайн предсказания для Pricing/Fraud")
+  }
+
+  System_Boundary(bi, "BI") {
+    Container(datalens, "DataLens", "BI", "Дашборды, отчёты, self-service аналитика")
+  }
+
+  System_Boundary(dq, "Качество данных и governance") {
+    Container(dq_checks, "Data Quality Checks", "Great Expectations/Deequ", "Валидации: полнота/типы/аномалии")
+    Container(lineage, "Lineage", "OpenLineage/Marquez", "Трассируемость происхождения данных")
+    Container(catalog, "Data Catalog", "DataHub/Amundsen", "Каталог датасетов и владельцев")
+  }
+
+  System_Boundary(obs, "Наблюдаемость") {
+    Container(prom, "Prometheus", "Metrics", "Метрики пайплайнов/лаг/свежесть")
+    Container(graf, "Grafana", "Dashboards", "Дашборды DQ/пайплайнов")
+    Container(alertm, "Alertmanager", "Alerting", "Алерты по SLA данных")
+  }
+}
+
+' Relationships: events
+Rel(s_booking, kafka, "Публикует доменные события", "Kafka")
+Rel(s_driver, kafka, "Публикует доменные события", "Kafka")
+Rel(s_pricing, kafka, "Публикует доменные события", "Kafka")
+Rel(s_pay, kafka, "Публикует доменные события", "Kafka")
+Rel(s_fraud, kafka, "Публикует доменные события", "Kafka")
+Rel(s_geo, kafka, "Публикует/читает сигналы", "Kafka")
+
+Rel(kafka, schema, "Проверка схем/совместимости", "HTTP")
+Rel(connect, kafka, "CDC/outbox → события", "Kafka")
+
+' Streaming path
+Rel(kafka, flink, "Потоки событий", "Kafka")
+Rel(flink, fs, "Пишет offline features", "Batch/Streaming")
+Rel(fs, redis, "Пишет online features", "Low-latency")
+
+Rel(redis, serving, "Читает online признаки", "KV")
+Rel(serving, s_pricing, "Скоринг/предикт (цена/сюрж)", "HTTP/gRPC")
+Rel(serving, s_fraud, "Скоринг/предикт (риск)", "HTTP/gRPC")
+
+' Batch path
+Rel(kafka, lake, "Сырые события → Raw слой", "Streaming sink")
+Rel(lake, train, "Исторические датасеты", "Batch")
+Rel(train, mlflow, "Логи/артефакты/модель", "HTTP")
+Rel(mlflow, serving, "Деплой модели", "CI/CD")
+
+Rel(kafka, ch, "Near-real-time витрины", "Streaming sink")
+Rel(ch, datalens, "Датасеты для BI", "SQL")
+
+' Orchestration
+Rel(airflow, lake, "ETL/feature jobs", "Batch")
+Rel(airflow, dq_checks, "Запуск проверок качества", "Batch")
+Rel(airflow, train, "Запуск retraining", "Batch")
+Rel(airflow, ch, "Пересчёты витрин", "Batch")
+
+' Data Quality / Governance
+Rel(dq_checks, lake, "Проверки качества (raw/silver/gold)", "Batch")
+Rel(dq_checks, ch, "Проверки витрин", "Batch")
+Rel(lineage, airflow, "Сбор lineage", "OpenLineage")
+Rel(catalog, lineage, "Метаданные/владельцы", "API")
+
+Rel(svc_owner, schema, "Владеет контрактами событий", "Process")
+Rel(ds, mlflow, "Смотрит эксперименты/версии", "UI/API")
+Rel(analyst, datalens, "Строит отчёты", "UI")
+
+' Observability
+Rel(flink, prom, "Метрики (lag/backpressure/checkpoints)", "scrape")
+Rel(airflow, prom, "Метрики DAG/ошибки", "scrape")
+Rel(dq_checks, prom, "Метрики качества (freshness/completeness)", "push/scrape")
+Rel(prom, graf, "Дашборды", "internal")
+Rel(prom, alertm, "Алерты", "internal")
+
+@enduml
