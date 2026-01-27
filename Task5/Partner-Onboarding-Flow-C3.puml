@@ -1,0 +1,41 @@
+@startuml Partner_Onboarding_Flow_C3
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Component.puml
+
+Person(partner_admin, "Администратор партнёра (Tenant Admin)")
+
+Container(api_gw, "API Gateway", "Kong/Envoy", "Приём запросов онбординга, auth, rate limit")
+Container(idp, "IdP (SSO)", "Keycloak/Auth0/AAD", "Пользователи/группы/роли, OIDC/SAML")
+Container(onboarding, "Tenant Onboarding Service", "Service", "Оркестрация провижининга ресурсов")
+Container(tenant_reg, "Tenant Registry", "Service", "tenant_id, регионы, tier, статусы")
+Container(tenant_cfg, "Tenant Config Service", "Service", "фичи/лимиты/интеграции")
+
+ContainerDb(shared_db, "Shared DB", "PostgreSQL+RLS", "schema/политики, массовые tenants")
+ContainerDb(dedicated_db, "Dedicated DB", "PostgreSQL", "DB/schema per tenant")
+Container(kafka_admin, "Kafka Admin API", "Kafka", "Топики/ACL/квоты")
+Container(sec, "Secret Manager/KMS", "Vault/KMS", "Секреты, ключи, rotation")
+
+Container(graf_api, "Grafana API", "Grafana", "Провижининг дашбордов")
+Container(alert_api, "Alertmanager API", "Alertmanager", "Провижининг алертов")
+
+Rel(partner_admin, api_gw, "POST /tenants (создать партнёра)", "HTTPS")
+Rel(api_gw, idp, "SSO/login + JWT", "OIDC/SAML")
+Rel(api_gw, onboarding, "Запуск процесса онбординга", "HTTP")
+
+Rel(onboarding, tenant_reg, "Создать tenant_id и статус=PROVISIONING", "HTTP")
+Rel(onboarding, idp, "Создать realm/group/roles + admin user", "Admin API")
+Rel(onboarding, sec, "Сгенерировать секреты/ключи/credentials", "API")
+
+Rel(onboarding, kafka_admin, "Создать namespaces/topics + ACL + quotas", "Admin API")
+
+Rel(onboarding, shared_db, "Создать schema + RLS policies (shared)", "SQL")
+Rel(onboarding, dedicated_db, "Создать DB/schema (dedicated)", "SQL")
+
+Rel(onboarding, tenant_cfg, "Создать baseline конфиг: регионы/лимиты/фичи", "HTTP")
+
+Rel(onboarding, graf_api, "Создать папку/дашборды per-tenant", "HTTP")
+Rel(onboarding, alert_api, "Создать алерты per-tenant", "HTTP")
+
+Rel(onboarding, tenant_reg, "Статус=ACTIVE + сохранить ссылки/параметры", "HTTP")
+Rel(onboarding, partner_admin, "Возврат: tenant_id, endpoints, инструкции, creds", "HTTPS")
+
+@enduml

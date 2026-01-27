@@ -1,0 +1,106 @@
+@startuml ToBe_Global_C2
+left to right direction
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+' Tags (красным выделяем изменения/добавления)
+AddElementTag("CHANGE", $bgColor="red", $fontColor="white", $borderColor="red")
+AddRelTag("CHANGE", $textColor="red", $lineColor="red")
+
+Person(passenger, "Пассажир")
+Person(driver, "Водитель")
+
+System_Boundary(gf, "GoFuture (To-Be) — глобальный ландшафт") {
+
+  ' Global Edge (изменения)
+  Container(geodns, "GeoDNS / Global Traffic Manager", "DNS/LB", "Маршрутизация в ближайший регион + health checks", $tags="CHANGE")
+  Container(cdn, "CDN + DDoS Protection", "Edge", "Anycast/кэш статики/защита L3-L4", $tags="CHANGE")
+  Container(waf, "WAF", "Security", "OWASP, bot mgmt, L7 rate limits", $tags="CHANGE")
+  Container(netfw, "Network Firewall / VPC Firewall", "Security", "Сегментация и deny-by-default", $tags="CHANGE")
+
+  Container(api_gw, "API Gateway / Edge", "Kong/Envoy/Nginx", "Auth, routing, Strangler, API versioning")
+
+  ' Regions
+  System_Boundary(rSEA1, "Регион SEA-1 (Singapore)") {
+    Container(lb1, "Ingress/LB", "L7 LB", "Вход в регион", $tags="CHANGE")
+    Container(cluster1, "Кластер приложений", "K8s/VMs", "Доменные сервисы + consumers + Flink jobs")
+    ContainerDb(db1, "Региональные БД сервисов", "PostgreSQL (HA)", "Primary+Sync Replica (multi-AZ)")
+    Container(kafka1, "Kafka (региональный кластер)", "Kafka", "Доменные события")
+  }
+
+  System_Boundary(rSEA2, "Регион SEA-2 (Jakarta)") {
+    Container(lb2, "Ingress/LB", "L7 LB", "Вход в регион", $tags="CHANGE")
+    Container(cluster2, "Кластер приложений", "K8s/VMs", "Доменные сервисы + consumers + Flink jobs")
+    ContainerDb(db2, "Региональные БД сервисов", "PostgreSQL (HA)", "Primary+Sync Replica (multi-AZ)")
+    Container(kafka2, "Kafka (региональный кластер)", "Kafka", "Доменные события")
+  }
+
+  System_Boundary(rSA1, "Регион SA-1 (São Paulo)") {
+    Container(lb3, "Ingress/LB", "L7 LB", "Вход в регион", $tags="CHANGE")
+    Container(cluster3, "Кластер приложений", "K8s/VMs", "Доменные сервисы + consumers + Flink jobs")
+    ContainerDb(db3, "Региональные БД сервисов", "PostgreSQL (HA)", "Primary+Sync Replica (multi-AZ)")
+    Container(kafka3, "Kafka (региональный кластер)", "Kafka", "Доменные события")
+  }
+
+  System_Boundary(rDR, "Регион DR (US/EU)") {
+    Container(lb4, "Ingress/LB", "L7 LB", "Резервный вход", $tags="CHANGE")
+    Container(cluster4, "Кластер DR/глобальные функции", "K8s/VMs", "DR + глобальная аналитика/управление")
+    ContainerDb(db4, "DR-реплики БД сервисов", "PostgreSQL (async)", "Асинхронные реплики из регионов", $tags="CHANGE")
+    Container(kafka4, "Kafka (DR/Global)", "Kafka", "Реплика топиков для DR/аналитики", $tags="CHANGE")
+  }
+
+  ' Observability (как единый слой)
+  System_Boundary(obs, "Наблюдаемость") {
+    Container(prom, "Prometheus", "Metrics", "Сбор метрик")
+    Container(graf, "Grafana", "Dashboards", "SLO/дашборды")
+    Container(loki, "Loki", "Logs", "Логи")
+    Container(otel, "OpenTelemetry Collector", "OTel", "Корреляция метрик/логов/трейсов")
+    Container(alertm, "Alertmanager", "Alerting", "On-call алерты")
+  }
+}
+
+' Traffic flow (изменения)
+Rel(passenger, geodns, "DNS/HTTPS", $tags="CHANGE")
+Rel(driver, geodns, "DNS/HTTPS", $tags="CHANGE")
+Rel(geodns, cdn, "Маршрутизация на edge", $tags="CHANGE")
+Rel(cdn, waf, "Edge → WAF", $tags="CHANGE")
+Rel(waf, netfw, "WAF → Network FW", $tags="CHANGE")
+Rel(netfw, api_gw, "Периметр → API Gateway", $tags="CHANGE")
+
+Rel(api_gw, lb1, "Трафик в SEA-1 (health/latency)", $tags="CHANGE")
+Rel(api_gw, lb2, "Трафик в SEA-2 (health/latency)", $tags="CHANGE")
+Rel(api_gw, lb3, "Трафик в SA-1 (health/latency)", $tags="CHANGE")
+Rel(api_gw, lb4, "Failover/DR", $tags="CHANGE")
+
+Rel(lb1, cluster1, "HTTP/gRPC")
+Rel(lb2, cluster2, "HTTP/gRPC")
+Rel(lb3, cluster3, "HTTP/gRPC")
+Rel(lb4, cluster4, "HTTP/gRPC")
+
+Rel(cluster1, db1, "SQL")
+Rel(cluster2, db2, "SQL")
+Rel(cluster3, db3, "SQL")
+Rel(cluster1, kafka1, "Kafka")
+Rel(cluster2, kafka2, "Kafka")
+Rel(cluster3, kafka3, "Kafka")
+
+' Межрегиональная репликация (изменения)
+Rel(db1, db4, "Async репликация БД → DR", $tags="CHANGE")
+Rel(db2, db4, "Async репликация БД → DR", $tags="CHANGE")
+Rel(db3, db4, "Async репликация БД → DR", $tags="CHANGE")
+
+Rel(kafka1, kafka4, "Реплика топиков → DR/Global", $tags="CHANGE")
+Rel(kafka2, kafka4, "Реплика топиков → DR/Global", $tags="CHANGE")
+Rel(kafka3, kafka4, "Реплика топиков → DR/Global", $tags="CHANGE")
+
+' Observability wiring (общее)
+Rel(cluster1, otel, "OTel")
+Rel(cluster2, otel, "OTel")
+Rel(cluster3, otel, "OTel")
+Rel(cluster4, otel, "OTel")
+Rel(otel, prom, "Metrics")
+Rel(otel, loki, "Logs")
+Rel(prom, alertm, "Alerts")
+Rel(graf, prom, "Dashboards")
+Rel(graf, loki, "Logs search")
+
+@enduml

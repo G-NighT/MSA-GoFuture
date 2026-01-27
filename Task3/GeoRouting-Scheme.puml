@@ -1,0 +1,34 @@
+@startuml GeoRouting_Scheme
+left to right direction
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+AddElementTag("CHANGE", $bgColor="red", $fontColor="white", $borderColor="red")
+AddRelTag("CHANGE", $textColor="red", $lineColor="red")
+
+Person(user, "Пользователь (SEA/SA)")
+
+System_Boundary(edge, "Геомаршрутизация и периметр") {
+  Container(geodns, "GeoDNS / Latency routing", "DNS/GLB", "Выбор ближайшего региона + health checks", $tags="CHANGE")
+  Container(cdn, "CDN + DDoS", "Edge", "Anycast + защита L3/L4", $tags="CHANGE")
+  Container(waf, "WAF", "Security", "L7 защита и rate limits", $tags="CHANGE")
+  Container(api, "API Gateway", "Kong/Envoy", "Маршрутизация на региональные ingress’ы")
+}
+
+System_Boundary(regions, "Региональные точки входа") {
+  Container(sea1, "Ingress SEA-1", "L7 LB", "Вход в регион SEA-1", $tags="CHANGE")
+  Container(sea2, "Ingress SEA-2", "L7 LB", "Вход в регион SEA-2", $tags="CHANGE")
+  Container(sa1, "Ingress SA-1", "L7 LB", "Вход в регион SA-1", $tags="CHANGE")
+  Container(dr, "Ingress DR", "L7 LB", "Вход в DR (failover)", $tags="CHANGE")
+}
+
+Rel(user, geodns, "DNS/HTTPS", $tags="CHANGE")
+Rel(geodns, cdn, "на ближайший edge", $tags="CHANGE")
+Rel(cdn, waf, "проверка/фильтрация", $tags="CHANGE")
+Rel(waf, api, "пропуск трафика", $tags="CHANGE")
+
+Rel(api, sea1, "если SEA-1 healthy", $tags="CHANGE")
+Rel(api, sea2, "если SEA-1 down / ближе", $tags="CHANGE")
+Rel(api, sa1, "если SA-1 ближе", $tags="CHANGE")
+Rel(api, dr, "если регионы недоступны", $tags="CHANGE")
+
+@enduml

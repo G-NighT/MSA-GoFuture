@@ -1,0 +1,133 @@
+@startuml ToBe_C2_GoFuture
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+' People
+Person(passenger, "Пассажир", "Заказывает и оплачивает поездки")
+Person(driver, "Водитель", "Принимает заказы и получает выплаты")
+Person(manager, "Корпоративный менеджер", "Управляет корпоративными поездками и счетами")
+Person(accountant, "Бухгалтер", "Контролирует выплаты")
+Person(partner_dev, "Партнёр/Разработчик", "Использует публичные API")
+
+System_Boundary(gofuture, "GoFuture Platform (To-Be)") {
+
+  Container(mobile_passenger, "Пассажирское приложение", "iOS/Android/Huawei", "UI пассажира")
+  Container(mobile_driver, "Водительское приложение", "iOS/Android/Huawei", "UI водителя")
+  Container(web_portal, "Корпоративный портал", "Web (React/Vue)", "UI для корпоративных клиентов")
+  Container(admin_portal, "Админ-панель", "Web (Django Admin/SPA)", "Операции и выплаты")
+
+  Container(api_gw, "API Gateway / Edge", "Kong/Envoy/Nginx", "Auth, rate limits, routing, API versioning, Strangler Fig")
+
+  Container(idp, "Identity Provider (IAM)", "OIDC/OAuth2", "SSO, токены, роли, сервис-аккаунты")
+
+  ' Legacy
+  Container(legacy_monolith, "GoFuture Monolith (Legacy)", "Django", "Оставшиеся домены во время миграции")
+
+  ' Domain microservices
+  System_Boundary(domains, "Domain Services (микросервисы)") {
+    Container(svc_booking, "Booking Service", "Service", "Заказ/жизненный цикл поездки, оркестрация")
+    Container(svc_driver, "Driver Service", "Service", "Профиль/статусы/доступность водителей")
+    Container(svc_pricing, "Pricing Service", "Service", "Dynamic pricing, surge, расчёт тарифа")
+    Container(svc_payments, "Payments Service", "Service", "Платежи/возвраты/инвойсы, интеграция с PSP")
+    Container(svc_notification, "Notification Service", "Service", "Push/SMS/e-mail, шаблоны, ретраи")
+    Container(svc_geography, "Geography Service", "Service", "Маршрутизация/ETA/геокодинг, адаптер к картам")
+    Container(svc_fraud, "Fraud Service", "Service", "Скоринг/правила/ML, флаги фрода")
+    Container(svc_analytics, "Analytics Ingestion", "Service", "Сбор событий, доставка в ClickHouse")
+  }
+
+  ' Data & Messaging
+  System_Boundary(data, "Data & Messaging") {
+    ContainerQueue(event_bus, "Event Bus", "Kafka (или аналог)", "Доменные события, интеграция и аналитика")
+    ContainerQueue(task_queue, "Task Queue", "RabbitMQ", "Фоновые задачи, ретраи, DLQ")
+
+    ContainerDb(db_booking, "Booking DB", "PostgreSQL", "Данные заказов/поездок")
+    ContainerDb(db_driver, "Driver DB", "PostgreSQL", "Данные водителей/статусов")
+    ContainerDb(db_pricing, "Pricing DB", "PostgreSQL/Redis", "Параметры/кэш pricing")
+    ContainerDb(db_payments, "Payments DB", "PostgreSQL", "Транзакции/инвойсы/аудит (в т.ч. payouts)")
+    ContainerDb(db_notification, "Notification DB", "PostgreSQL/Redis", "Шаблоны/предпочтения/статусы отправок")
+    ContainerDb(db_geography, "Geography Cache", "Redis", "Кэш маршрутов/ETA")
+    ContainerDb(db_fraud, "Fraud DB", "PostgreSQL/Redis", "Скоринг/правила/флаги")
+    ContainerDb(ch, "Analytics DB", "ClickHouse", "Near-real-time аналитика")
+
+    ContainerDb(db_legacy, "Legacy DB", "PostgreSQL", "Единая БД монолита (на период миграции)")
+  }
+
+  ' External integrations
+  System_Ext(yandex_pay, "Яндекс Пэй", "Платёжный шлюз")
+  System_Ext(bank_api, "Банковские API", "Выплаты водителям")
+  System_Ext(yandex_maps, "Яндекс Карты", "Карты/маршруты/геоданные")
+  System_Ext(push, "FCM/APNS/Huawei Push", "Push-уведомления")
+
+  ' Observability (optional on C2 but useful)
+  System_Boundary(obs, "Observability") {
+    Container(prom, "Prometheus", "Monitoring", "Метрики")
+    Container(graf, "Grafana", "Dashboards", "Дашборды")
+    Container(loki, "Loki", "Logs", "Логи")
+    Container(otel, "OpenTelemetry Collector", "Tracing", "Трейсы/корреляция")
+  }
+}
+
+' Relationships (Users -> Edge)
+Rel(passenger, mobile_passenger, "Uses")
+Rel(driver, mobile_driver, "Uses")
+Rel(manager, web_portal, "Uses")
+Rel(accountant, admin_portal, "Uses")
+Rel(partner_dev, api_gw, "Calls public APIs")
+
+Rel(mobile_passenger, api_gw, "HTTPS/REST")
+Rel(mobile_driver, api_gw, "HTTPS/REST")
+Rel(web_portal, api_gw, "HTTPS/REST")
+Rel(admin_portal, api_gw, "HTTPS/REST")
+
+Rel(api_gw, idp, "OIDC/OAuth2")
+Rel(api_gw, svc_booking, "Routes /api/v1/booking/*", "HTTPS/REST")
+Rel(api_gw, svc_driver, "Routes /api/v1/driver/*", "HTTPS/REST")
+Rel(api_gw, svc_pricing, "Routes /api/v1/pricing/*", "HTTPS/REST")
+Rel(api_gw, svc_payments, "Routes /api/v1/payments/*", "HTTPS/REST")
+Rel(api_gw, svc_notification, "Routes /api/v1/notify/*", "HTTPS/REST")
+Rel(api_gw, svc_geography, "Routes /api/v1/geo/*", "HTTPS/REST")
+Rel(api_gw, svc_fraud, "Routes /api/v1/fraud/*", "HTTPS/REST")
+Rel(api_gw, svc_analytics, "Routes /api/v1/analytics/*", "HTTPS/REST")
+
+' Backward compatibility: Strangler Fig (still route to monolith)
+Rel(api_gw, legacy_monolith, "Routes legacy endpoints (пока не вырезано)", "HTTPS/REST")
+
+' Service <-> DB
+Rel(svc_booking, db_booking, "Read/Write")
+Rel(svc_driver, db_driver, "Read/Write")
+Rel(svc_pricing, db_pricing, "Read/Write")
+Rel(svc_payments, db_payments, "Read/Write")
+Rel(svc_notification, db_notification, "Read/Write")
+Rel(svc_geography, db_geography, "Cache")
+Rel(svc_fraud, db_fraud, "Read/Write")
+Rel(svc_analytics, ch, "Write")
+
+' Legacy DB usage during transition
+Rel(legacy_monolith, db_legacy, "Read/Write (transition)")
+Rel(legacy_monolith, event_bus, "Publishes domain events via Outbox (compat)", "Async")
+Rel(event_bus, svc_analytics, "Events -> ingestion", "Async")
+
+' Messaging patterns
+Rel(svc_notification, task_queue, "Async send/retry", "AMQP")
+Rel(svc_payments, task_queue, "Async reconciliation/payout jobs", "AMQP")
+Rel(svc_booking, event_bus, "Publishes Trip events", "Async")
+Rel(svc_driver, event_bus, "Publishes Driver status/location events", "Async")
+Rel(svc_pricing, event_bus, "Publishes pricing signals", "Async")
+Rel(svc_fraud, event_bus, "Consumes trip/payment events", "Async")
+
+' External integrations
+Rel(svc_payments, yandex_pay, "Authorize/Capture/Refund", "HTTPS")
+Rel(svc_payments, bank_api, "Payouts", "HTTPS")
+Rel(svc_geography, yandex_maps, "Routes/ETA/Geocoding", "HTTPS")
+Rel(svc_notification, push, "Push send", "HTTPS")
+
+' Observability wiring
+Rel(otel, prom, "Exports metrics", "internal")
+Rel(otel, loki, "Exports logs correlation", "internal")
+Rel(graf, prom, "Reads", "internal")
+Rel(graf, loki, "Reads", "internal")
+Rel(api_gw, otel, "Traces/metrics/logs", "OTel")
+Rel(svc_booking, otel, "Traces/metrics/logs", "OTel")
+Rel(svc_driver, otel, "Traces/metrics/logs", "OTel")
+Rel(legacy_monolith, otel, "Traces/metrics/logs", "OTel")
+
+@enduml

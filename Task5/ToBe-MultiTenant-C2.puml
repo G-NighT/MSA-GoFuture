@@ -1,0 +1,92 @@
+@startuml ToBe_MultiTenant_C2
+!include https://raw.githubusercontent.com/plantuml-stdlib/C4-PlantUML/master/C4_Container.puml
+
+Person(partner_admin, "Администратор партнёра (Tenant Admin)")
+Person(end_user, "Пользователь приложений", "Пассажир/водитель/корп. клиент")
+
+System_Boundary(gf, "GoFuture — мультитенантная платформа (To-Be)") {
+
+  Container(api_gw, "API Gateway / Edge", "Kong/Envoy/Nginx", "JWT validation, rate limits per tenant, routing")
+
+  System_Boundary(iam, "IAM / SSO") {
+    Container(idp, "IdP (SSO)", "Keycloak/Auth0/AAD", "OIDC/SAML, пользователи и федерация")
+    Container(opa, "Policy Engine (опц.)", "OPA", "Централизованные политики RBAC/ABAC")
+  }
+
+  System_Boundary(tenant_mgmt, "Управление партнёрами (tenants)") {
+    Container(tenant_reg, "Tenant Registry", "Service", "Реестр партнёров: tenant_id, регионы, tier, статусы")
+    Container(tenant_cfg, "Tenant Config Service", "Service", "Фичи, лимиты, интеграции, конфиги per-tenant")
+    Container(onboarding, "Tenant Onboarding Service", "Service", "Автоматическое подключение и провижининг ресурсов")
+  }
+
+  System_Boundary(domains, "Доменные сервисы (tenant-aware)") {
+    Container(s_booking, "Booking Service", "Service", "Работает в контексте tenant_id")
+    Container(s_driver, "Driver Service", "Service", "tenant-aware")
+    Container(s_pricing, "Pricing Service", "Service", "tenant-aware")
+    Container(s_pay, "Payments Service", "Service", "tenant-aware (повышенная изоляция)")
+  }
+
+  System_Boundary(data, "Данные и события") {
+    ContainerDb(shared_db, "Shared DB (массовые tenants)", "PostgreSQL + RLS", "Row-level isolation по tenant_id")
+    ContainerDb(dedicated_db, "Dedicated DB (крупные tenants)", "PostgreSQL", "DB/schema per tenant (PII/Payments)")
+
+    Container(kafka, "Kafka", "Kafka", "Топики с tenant_id в headers/payload")
+    Container(schema, "Schema Registry", "Schema Registry", "Схемы событий и совместимость")
+  }
+
+  System_Boundary(obs, "Наблюдаемость (multi-tenant)") {
+    Container(otel, "OpenTelemetry Collector", "OTel", "Трейсы/метрики/логи с tenant_id/region")
+    Container(prom, "Prometheus", "Metrics", "Метрики (агрегации по tenant)")
+    Container(graf, "Grafana", "Dashboards", "Дашборды per-tenant и platform")
+    Container(alertm, "Alertmanager", "Alerting", "Алерты per-tenant (tiered)")
+    Container(loki, "Loki", "Logs", "Логи с tenant_id")
+  }
+}
+
+Rel(end_user, api_gw, "HTTPS")
+Rel(partner_admin, api_gw, "HTTPS (admin portal/API)")
+
+Rel(api_gw, idp, "OIDC/SAML (login/token)")
+Rel(api_gw, opa, "Policy check (опц.)", "HTTP")
+
+Rel(api_gw, tenant_reg, "Получить tenant context", "HTTP")
+Rel(api_gw, tenant_cfg, "Получить feature flags/лимиты", "HTTP")
+
+Rel(api_gw, s_booking, "REST", "tenant_id в JWT/headers")
+Rel(api_gw, s_driver, "REST", "tenant_id в JWT/headers")
+Rel(api_gw, s_pricing, "REST", "tenant_id в JWT/headers")
+Rel(api_gw, s_pay, "REST", "tenant_id в JWT/headers")
+
+Rel(s_booking, kafka, "Produce/Consume events", "tenant_id in headers")
+Rel(s_driver, kafka, "Produce/Consume events", "tenant_id in headers")
+Rel(s_pricing, kafka, "Produce/Consume events", "tenant_id in headers")
+Rel(s_pay, kafka, "Produce/Consume events", "tenant_id in headers")
+Rel(kafka, schema, "Схемы", "HTTP")
+
+Rel(s_booking, shared_db, "RW (массовые tenants)")
+Rel(s_driver, shared_db, "RW (массовые tenants)")
+Rel(s_pricing, shared_db, "RW (массовые tenants)")
+Rel(s_pay, dedicated_db, "RW (крупные tenants/PII)", "policy")
+
+Rel(onboarding, tenant_reg, "Создать tenant + статусы", "HTTP")
+Rel(onboarding, idp, "Создать realm/groups/roles", "Admin API")
+Rel(onboarding, kafka, "Создать топики/ACL/квоты", "Admin API")
+Rel(onboarding, shared_db, "Создать schema/права (если shared)", "SQL")
+Rel(onboarding, dedicated_db, "Создать DB/schema (если dedicated)", "SQL")
+Rel(onboarding, tenant_cfg, "Создать baseline конфиги", "HTTP")
+Rel(onboarding, graf, "Создать дашборды per-tenant", "API")
+Rel(onboarding, alertm, "Создать алерты per-tenant", "API")
+
+' Observability wiring
+Rel(api_gw, otel, "OTel")
+Rel(s_booking, otel, "OTel")
+Rel(s_driver, otel, "OTel")
+Rel(s_pricing, otel, "OTel")
+Rel(s_pay, otel, "OTel")
+
+Rel(otel, prom, "Metrics")
+Rel(otel, loki, "Logs")
+Rel(prom, graf, "Dashboards")
+Rel(prom, alertm, "Alerts")
+
+@enduml
